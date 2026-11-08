@@ -1,0 +1,49 @@
+name: cleanup-tags
+
+# Remove the Docker Hub tags of deleted branches and closed PRs.
+# Note: "delete" events only run from the workflow on the default branch.
+on:
+  delete:
+  pull_request:
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      kind:
+        description: what to clean up
+        type: choice
+        options: [branch, pr]
+        required: true
+      name:
+        description: branch name or PR number
+        required: true
+      dry_run:
+        description: only print what would be deleted
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    # forks' PRs never published anything
+    if: >-
+      (github.event_name == 'delete' && github.event.ref_type == 'branch') ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v6
+      - name: Delete tags
+        env:
+          DOCKERHUB_REPO: ${{ vars.DOCKERHUB_REPO }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '' }}
+          KIND: ${{ github.event_name == 'pull_request' && 'pr' || github.event_name == 'delete' && 'branch' || inputs.kind }}
+          NAME: ${{ github.event_name == 'pull_request' && github.event.number || github.event_name == 'delete' && github.event.ref || inputs.name }}
+        run: |
+          if [[ "$KIND" == branch && "$NAME" == master ]]; then
+            echo "refusing to clean up master"; exit 0
+          fi
+          scripts/cleanup-tags.sh "$KIND" "$NAME"

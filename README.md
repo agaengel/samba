@@ -147,7 +147,9 @@ the exact tag (`v4.23.8-3`) if you want updates only when you decide.
 
 Builds of other branches and pull requests are tagged `<branch>`,
 `<branch>-<samba version>`, `pr-<number>` and `pr-<number>-<samba version>`.
-Use them for testing only.
+Use them for testing only. They are deleted from Docker Hub when the branch is
+removed or the pull request is closed or merged. Branches whose names look like
+a version with a dot (for example `1.0-wip`) are never cleaned up.
 
 ## Windows 10/11 network discovery
 
