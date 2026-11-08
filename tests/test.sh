@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Integration tests for the samba image.
-# Usage: tests/test.sh [image]   (default image: samba-test)
+# Usage: tests/test.sh [image] [expected-arch: amd64|arm64]
 set -u
 IMAGE="${1:-samba-test}"
+ARCH="${2:-}"
 NAME="samba-it-$$"
 FAILED=0
 
@@ -32,6 +33,15 @@ smbc() { docker exec "$NAME" smbclient "$@"; }
 
 echo "== script checks"
 check "samba.sh passes bash -n" bash -n "$(dirname "$0")/../samba.sh"
+
+if [[ -n "$ARCH" ]]; then
+    echo "== architecture"
+    img=$(docker image inspect -f '{{.Architecture}}' "$IMAGE" 2>&1)
+    [[ "$img" == "$ARCH" ]] && pass "image architecture is $img" || fail "image architecture: expected $ARCH, got $img"
+    m=$(docker run --rm --entrypoint uname "$IMAGE" -m 2>&1)
+    case "$ARCH" in amd64) want=x86_64 ;; arm64) want=aarch64 ;; *) want=$ARCH ;; esac
+    [[ "$m" == "$want" ]] && pass "container reports machine $m" || fail "container machine: expected $want, got $m"
+fi
 
 echo "== usage"
 out=$(docker run --rm "$IMAGE" -h 2>&1)
@@ -69,6 +79,12 @@ if start -- -u "alice;secret" -p -s "data;/share;yes;no;no;alice" -d false; then
     docker exec "$NAME" test -f /share/f.txt && pass "file lands in share path" || fail "file lands in share path"
     [[ "$(smbc //localhost/data -U alice%secret -m SMB3 -c 'more f.txt' 2>/dev/null)" == *hello* ]] \
         && pass "download returns content" || fail "download returns content"
+    # access from a separate client container over the network, not via exec
+    ip=$(docker inspect -f '{{(index .NetworkSettings.Networks "bridge").IPAddress}}' "$NAME")
+    ext=$(docker run --rm --entrypoint smbclient "$IMAGE" //"$ip"/data -U alice%secret -m SMB3 \
+        -c 'more f.txt' 2>&1)
+    [[ "$ext" == *hello* ]] && pass "external smbclient container can read the file" \
+        || fail "external smbclient access to //$ip/data: $ext"
     smbc //localhost/data -U alice%wrong -m SMB3 -c ls >/dev/null 2>&1 \
         && fail "wrong password rejected" || pass "wrong password rejected"
     smbc //localhost/data -U% -m SMB3 -c ls >/dev/null 2>&1 \

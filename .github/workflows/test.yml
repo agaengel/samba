@@ -6,13 +6,22 @@ on:
 
 jobs:
   integration:
-    runs-on: ubuntu-latest
+    name: integration (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - name: Build image
         run: docker build -t samba-test .
       - name: Integration tests
-        run: tests/test.sh samba-test
+        run: tests/test.sh samba-test ${{ matrix.arch }}
 
   lint:
     runs-on: ubuntu-latest
