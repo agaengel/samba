@@ -1,0 +1,108 @@
+name: update-versions
+
+# Daily: look for a newer Alpine release / apk package versions, run the full
+# test matrix against the bumped Dockerfiles and open a PR only if it passes.
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.update.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Look for new versions
+        id: update
+        run: |
+          summary=$(scripts/update-versions.sh)
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Everything is up to date."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            printf '%s\n' "$summary" > update-summary.md
+            cat update-summary.md
+          fi
+      - name: Keep the bumped files for the test and PR jobs
+        if: steps.update.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: updated-files
+          path: |
+            Dockerfile
+            Dockerfile.aarch64
+            Dockerfile.armhf
+            update-summary.md
+
+  test:
+    needs: check
+    if: needs.check.outputs.changed == 'true'
+    name: test (${{ matrix.arch }})
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: updated-files
+      - name: Lint Dockerfiles
+        run: |
+          for f in Dockerfile Dockerfile.aarch64 Dockerfile.armhf; do
+            docker run --rm -i hadolint/hadolint hadolint --failure-threshold error - < "$f"
+          done
+      - name: Build image with updated versions
+        run: docker build --no-cache -t samba-test .
+      - name: Integration tests
+        run: tests/test.sh samba-test ${{ matrix.arch }}
+
+  # Note: a PR created with the default GITHUB_TOKEN does not start other
+  # workflows, and the repository setting "Allow GitHub Actions to create and
+  # approve pull requests" must be enabled for this job to work.
+  pull-request:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: updated-files
+      - name: Read summary
+        id: summary
+        run: |
+          delim="END_$(openssl rand -hex 8)"
+          # shellcheck disable=SC2016  # the backticks are meant literally
+          {
+            echo "body<<$delim"
+            echo 'Automated version bump. `Dockerfile` was built and `tests/test.sh` passed on amd64 and arm64 with these changes. `Dockerfile.aarch64` and `Dockerfile.armhf` get the same bump and are linted, but not built:'
+            echo
+            cat update-summary.md
+            echo "$delim"
+          } >> "$GITHUB_OUTPUT"
+          rm update-summary.md
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          branch: auto/update-versions
+          delete-branch: true
+          commit-message: "Update Alpine/apk package versions"
+          title: "Update Alpine/apk package versions"
+          body: ${{ steps.summary.outputs.body }}
+          add-paths: |
+            Dockerfile
+            Dockerfile.aarch64
+            Dockerfile.armhf
