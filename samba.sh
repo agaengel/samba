@@ -183,6 +183,79 @@ widelinks() { local file=/etc/samba/smb.conf \
     sed -i 's/\(follow symlinks = yes\)/'"$replace"'/' $file
 }
 
+### supervise: generate supervisord config and run all daemons under it
+# Arguments:
+#   none)
+# Return:
+#   never (execs supervisord)
+supervise() { local conf=/run/supervisord.conf wg \
+            wgarg="" listener=/run/smbd-watch-listener.sh wsdd_opts="${WSDD_OPTS:-}"
+    wg=$(sed -n 's/^[[:space:]]*workgroup[[:space:]]*=[[:space:]]*//p' \
+                /etc/samba/smb.conf | head -n1 | sed 's/[[:space:]]*$//')
+    # trim blanks around the wsdd options; escape % for supervisord
+    wsdd_opts="${wsdd_opts#"${wsdd_opts%%[![:space:]]*}"}"
+    wsdd_opts="${wsdd_opts%"${wsdd_opts##*[![:space:]]}"}"
+    wg="${wg//\%/%%}"; wg="${wg//\'/}"
+    # built here: quotes inside ${..:+..} are lost in an unquoted heredoc
+    [[ $wg ]] && wgarg="--workgroup '$wg'"
+    # smbd is the essential daemon and is not restarted by supervisord: when
+    # it exits (or goes FATAL) stop supervisord, so the container exits as it
+    # did when smbd was PID 1 and a Docker restart policy can take over
+    cat >$listener <<-'LISTENER'
+	#!/bin/bash
+	echo READY
+	while read -r header; do
+	    read -r -N "${header##*len:}" payload
+	    [[ "$payload" == *"processname:smbd "* ]] && kill -TERM $PPID
+	    printf 'RESULT 2\nOK'
+	    echo READY
+	done
+	LISTENER
+    chmod +x $listener
+    # NOTE: the heredocs below need TAB indentation (<<- only strips tabs)
+    cat >$conf <<-CONF
+	[supervisord]
+	nodaemon=true
+	user=root
+	logfile=/dev/null
+	logfile_maxbytes=0
+	pidfile=/run/supervisord.pid
+
+	[program:smbd]
+	command=ionice -c 3 smbd -F --debug-stdout --no-process-group
+	autorestart=false
+	stdout_logfile=/dev/stdout
+	stdout_logfile_maxbytes=0
+	redirect_stderr=true
+
+	[eventlistener:smbd_watch]
+	command=$listener
+	events=PROCESS_STATE_EXITED,PROCESS_STATE_FATAL
+	autorestart=true
+	CONF
+    if [[ ${NMBD:-""} ]]; then cat >>$conf <<-CONF
+
+	[program:nmbd]
+	command=ionice -c 3 nmbd -F --no-process-group
+	autorestart=true
+	stdout_logfile=/dev/stdout
+	stdout_logfile_maxbytes=0
+	redirect_stderr=true
+	CONF
+    fi
+    if [[ "${wsdd_opts,,}" != false ]]; then cat >>$conf <<-CONF
+
+	[program:wsdd]
+	command=wsdd $wgarg ${wsdd_opts//\%/%%}
+	autorestart=true
+	stdout_logfile=/dev/stdout
+	stdout_logfile_maxbytes=0
+	redirect_stderr=true
+	CONF
+    fi
+    exec supervisord -c $conf
+}
+
 ### usage: Help
 # Arguments:
 #   none)
@@ -201,6 +274,8 @@ Options (fields in '[]' are optional, '<>' are required):
     -i \"<path>\" Import smbpassword
                 required arg: \"<path>\" - full file path in container
     -n          Start the 'nmbd' daemon to advertise the shares
+    -d \"<opts>\"  Options passed to wsdd (WS-Discovery) e.g. \"-i eth0\"
+                or \"false\" to disable wsdd (needs --net host to work)
     -p          Set ownership and permissions on the shares
     -r          Disable recycle bin for shares
     -S          Disable SMB2 minimum version
@@ -241,9 +316,10 @@ The 'command' (if provided and valid) will be run instead of samba
 [[ "${USERID:-""}" =~ ^[0-9]+$ ]] && usermod -u $USERID -o smbuser
 [[ "${GROUPID:-""}" =~ ^[0-9]+$ ]] && groupmod -g $GROUPID -o smb
 
-while getopts ":hc:G:g:i:nprs:Su:Ww:I:" opt; do
+while getopts ":hc:d:G:g:i:nprs:Su:Ww:I:" opt; do
     case "$opt" in
         h) usage ;;
+        d) WSDD_OPTS="$OPTARG" ;;
         c) charmap "$OPTARG" ;;
         G) eval generic $(sed 's/^/"/; s/$/"/; s/;/" "/g' <<< $OPTARG) ;;
         g) global "$OPTARG" ;;
@@ -292,6 +368,5 @@ elif [[ $# -ge 1 ]]; then
 elif ps -ef | egrep -v grep | grep -q smbd; then
     echo "Service already running, please restart container to apply changes"
 else
-    [[ ${NMBD:-""} ]] && ionice -c 3 nmbd -D
-    exec ionice -c 3 smbd -FS --no-process-group </dev/null
+    supervise
 fi

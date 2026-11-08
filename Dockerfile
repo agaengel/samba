@@ -1,9 +1,9 @@
-FROM alpine
-MAINTAINER David Personette <dperson@gmail.com>
+FROM alpine:3.24
+LABEL maintainer="David Personette <dperson@gmail.com>"
 
 # Install samba
 RUN apk --no-cache --no-progress upgrade && \
-    apk --no-cache --no-progress add bash samba shadow tini tzdata && \
+    apk --no-cache --no-progress add bash samba shadow supervisor tzdata wsdd && \
     addgroup -S smb && \
     adduser -S -D -H -h /tmp -s /sbin/nologin -G smb -g 'Samba User' smbuser &&\
     file="/etc/samba/smb.conf" && \
@@ -57,7 +57,7 @@ RUN apk --no-cache --no-progress upgrade && \
 
 COPY samba.sh /usr/bin/
 
-EXPOSE 137/udp 138/udp 139 445
+EXPOSE 137/udp 138/udp 139 445 3702/udp 5357
 
 HEALTHCHECK --interval=60s --timeout=15s \
             CMD smbclient -L \\localhost -U % -m SMB3
@@ -65,4 +65,4 @@ HEALTHCHECK --interval=60s --timeout=15s \
 VOLUME ["/etc", "/var/cache/samba", "/var/lib/samba", "/var/log/samba",\
             "/run/samba"]
 
-ENTRYPOINT ["/sbin/tini", "--", "/usr/bin/samba.sh"]
+ENTRYPOINT ["/usr/bin/samba.sh"]
