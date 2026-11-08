@@ -12,11 +12,11 @@ permissions:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       changed: ${{ steps.update.outputs.changed }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Look for new versions
         id: update
         run: |
@@ -31,7 +31,7 @@ jobs:
           fi
       - name: Keep the bumped files for the test and PR jobs
         if: steps.update.outputs.changed == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: updated-files
           path: |
@@ -49,13 +49,13 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - arch: arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v7
         with:
           name: updated-files
       - name: Lint Dockerfiles
@@ -73,13 +73,13 @@ jobs:
   # approve pull requests" must be enabled for this job to work.
   pull-request:
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v7
         with:
           name: updated-files
       - name: Read summary
@@ -95,7 +95,7 @@ jobs:
             echo "$delim"
           } >> "$GITHUB_OUTPUT"
           rm update-summary.md
-      - uses: peter-evans/create-pull-request@v7
+      - uses: peter-evans/create-pull-request@v8
         with:
           branch: auto/update-versions
           delete-branch: true
