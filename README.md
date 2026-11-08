@@ -40,6 +40,8 @@ OR set local storage:
         -i "<path>" Import smbpassword
                     required arg: "<path>" - full file path in container
         -n          Start the 'nmbd' daemon to advertise the shares
+        -d "<opts>"  Options passed to wsdd (WS-Discovery) e.g. "-i eth0"
+                    or "false" to disable wsdd (needs --net host to work)
         -p          Set ownership and permissions on the shares
         -r          Disable recycle bin for shares
         -S          Disable SMB2 minimum version
@@ -81,6 +83,7 @@ ENVIRONMENT VARIABLES
  * `GLOBAL` - As above, configure a global option (See NOTE3 below)
  * `IMPORT` - As above, import a smbpassword file
  * `NMBD` - As above, enable nmbd
+ * `WSDD_OPTS` - As above, options for wsdd, or `false` to disable it
  * `PERMISSIONS` - As above, set file permissions on all shares
  * `RECYCLE` - As above, disable recycle bin
  * `SHARE` - As above, setup a share (See NOTE3 below)
@@ -102,6 +105,10 @@ container configured to use the hosts network stack.
 **NOTE3**: optionally supports additional variables starting with the same name,
 IE `SHARE` also will work for `SHARE2`, `SHARE3`... `SHAREx`, etc.
 
+**NOTE4**: the image runs smbd, nmbd (only with `-n`) and wsdd under
+supervisord, which restarts a daemon that crashes. wsdd is started by default,
+see "Windows 10/11 network discovery" below.
+
 ## Examples
 
 Any of the commands can be run at creation with `docker run` or later with
@@ -120,6 +127,49 @@ Any of the commands can be run at creation with `docker run` or later with
                 -s "users;/srv;no;no;no;example1,example2" \
                 -s "example1 private share;/example1;no;no;no;example1" \
                 -s "example2 private share;/example2;no;no;no;example2"
+
+## Image tags
+
+The release tags carry the Samba version, so it is clear what you get. Images
+are built for `linux/amd64` and `linux/arm64`.
+
+| Tag | Moves? | Meaning |
+|-----|--------|---------|
+| `latest` | yes | newest build from `master` |
+| `4.23` | yes | newest build of the Samba 4.23 series |
+| `4.23.8` | yes | newest build of Samba 4.23.8 |
+| `4.23.8-alpine3.24` | yes | newest build of Samba 4.23.8 on Alpine 3.24 |
+| `v4.23.8-3` | no | one exact build, same name as the GitHub release |
+
+The number after the Samba version counts the builds of that Samba version, so
+a new Alpine base or a script change with the same Samba gives `v4.23.8-4`. Pin
+the exact tag (`v4.23.8-3`) if you want updates only when you decide.
+
+Builds of other branches and pull requests are tagged `<branch>`,
+`<branch>-<samba version>`, `pr-<number>` and `pr-<number>-<samba version>`.
+Use them for testing only.
+
+## Windows 10/11 network discovery
+
+Windows 10/11 no longer finds servers through NetBIOS (`-n`). It uses
+WS-Discovery, which Samba does not provide, so the image starts
+[wsdd](https://github.com/christgau/wsdd). Without it the server will not show
+up in Explorer's "Network" view, but `\\server\share` and `\\<ip>\share` still work.
+
+wsdd uses multicast (UDP 3702, TCP 5357), which only works when the container
+uses the host network:
+
+    sudo docker run -it --name samba --net host \
+                -v /path/to/directory:/mount \
+                --detach agaengel/samba -p -s "share;/mount"
+
+ * `-d "-i eth0"` (or `WSDD_OPTS="-i eth0"`) passes options to wsdd, for example
+   to bind it to one interface. The workgroup is taken from `smb.conf`
+   (`-w` / `WORKGROUP`).
+ * `-d false` disables wsdd. Do this when the container is **not** on the host
+   network, where wsdd cannot work anyway.
+ * Allow the ports through the host firewall: Samba 445/tcp (with `-n` also
+   139/tcp and 137-138/udp) and wsdd 3702/udp and 5357/tcp.
 
 # User Feedback
 
