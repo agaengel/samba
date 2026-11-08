@@ -221,6 +221,15 @@ supervise() { local conf=/run/supervisord.conf wg \
 	logfile_maxbytes=0
 	pidfile=/run/supervisord.pid
 
+	[unix_http_server]
+	file=/run/supervisor.sock
+
+	[rpcinterface:supervisor]
+	supervisor.rpcinterface_factory=supervisor.rpcinterface:make_main_rpcinterface
+
+	[supervisorctl]
+	serverurl=unix:///run/supervisor.sock
+
 	[program:smbd]
 	command=ionice -c 3 smbd -F --debug-stdout --no-process-group
 	autorestart=false

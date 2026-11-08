@@ -108,6 +108,14 @@ if start --net host -- -n -w TESTGRP -s "pub;/pub;yes;no;yes"; then
     grep -q "wsdd" <<<"$procs" && pass "wsdd starts by default" || fail "wsdd starts by default"
     grep -q -- "--workgroup TESTGRP" <<<"$procs" && pass "wsdd uses smb.conf workgroup" || fail "wsdd workgroup"
     smbc //localhost/pub -U% -m SMB3 -c ls >/dev/null 2>&1 && pass "guest share reachable" || fail "guest share reachable"
+    for _ in $(seq 1 10); do  # give supervisord a moment on slow hosts
+        st=$(docker exec "$NAME" supervisorctl status)
+        [[ $(grep -Ec '^(smbd|nmbd|wsdd) +RUNNING' <<<"$st") -eq 3 ]] && break
+        sleep 1
+    done
+    for d in smbd nmbd wsdd; do
+        grep -Eq "^$d +RUNNING" <<<"$st" && pass "supervisorctl: $d RUNNING" || fail "supervisorctl: $d RUNNING"
+    done
     docker exec "$NAME" pkill -f bin/wsdd; sleep 4
     docker exec "$NAME" pgrep -f bin/wsdd >/dev/null && pass "supervisord restarts wsdd" || fail "supervisord restarts wsdd"
 else

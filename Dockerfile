@@ -14,6 +14,7 @@ RUN apk --no-cache --no-progress upgrade && \
     apk --no-cache --no-progress add "bash=${APK_BASH}" "samba=${APK_SAMBA}" \
         "shadow=${APK_SHADOW}" "supervisor=${APK_SUPERVISOR}" \
         "tzdata=${APK_TZDATA}" "wsdd=${APK_WSDD}" && \
+    ln -sf /run/supervisord.conf /etc/supervisord.conf && \
     addgroup -S smb && \
     adduser -S -D -H -h /tmp -s /sbin/nologin -G smb -g 'Samba User' smbuser &&\
     file="/etc/samba/smb.conf" && \

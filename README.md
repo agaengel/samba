@@ -106,8 +106,14 @@ container configured to use the hosts network stack.
 IE `SHARE` also will work for `SHARE2`, `SHARE3`... `SHAREx`, etc.
 
 **NOTE4**: the image runs smbd, nmbd (only with `-n`) and wsdd under
-supervisord, which restarts a daemon that crashes. wsdd is started by default,
-see "Windows 10/11 network discovery" below.
+supervisord, which restarts nmbd and wsdd if they crash. smbd is not restarted:
+when it exits the container exits, so use a Docker restart policy (for example
+`--restart unless-stopped`). wsdd is started by default, see "Windows 10/11
+network discovery" below.
+Check or restart them with `docker exec samba supervisorctl status` and
+`docker exec samba supervisorctl restart wsdd`. This works with the default
+entrypoint only (not when a command is passed to the image); if you replaced
+`/etc`, add `-c /run/supervisord.conf`.
 
 ## Examples
 
