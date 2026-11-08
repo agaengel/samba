@@ -1,8 +1,9 @@
 name: test
 
+# Reusable: called from ci.yml; can also be started by hand.
 on:
-  push:
-  pull_request:
+  workflow_call:
+  workflow_dispatch:
 
 jobs:
   integration:

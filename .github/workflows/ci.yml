@@ -1,0 +1,102 @@
+name: ci
+
+# Every push / PR: test, then publish an image to Docker Hub.
+# Push to master: additionally tag + GitHub release with the Samba version.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
+  meta:
+    runs-on: ubuntu-24.04
+    outputs:
+      samba: ${{ steps.v.outputs.samba }}
+      minor: ${{ steps.v.outputs.minor }}
+      release: ${{ steps.v.outputs.release }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Work out version
+        id: v
+        run: |
+          samba=$(sed -n 's/^ARG APK_SAMBA=\(.*\)-r[0-9]*$/\1/p' Dockerfile)
+          [[ -n "$samba" ]] || { echo "cannot read APK_SAMBA" >&2; exit 1; }
+          # next build number for this Samba version: v4.23.8-1, -2, ...
+          last=$(git tag -l "v${samba}-*" | sed "s/^v${samba}-//" | sort -n | tail -n1)
+          {
+            echo "samba=$samba"
+            echo "minor=${samba%.*}"
+            echo "release=v${samba}-$(( ${last:-0} + 1 ))"
+          } >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: [test, meta]
+    # forks' PRs get no secrets, so only publish for branches / same-repo PRs
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    env:
+      IS_MASTER: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Image tags
+        id: tags
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ vars.DOCKERHUB_REPO }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=latest,enable=${{ env.IS_MASTER }}
+            type=raw,value=${{ needs.meta.outputs.minor }},enable=${{ env.IS_MASTER }}
+            type=raw,value=${{ needs.meta.outputs.samba }},enable=${{ env.IS_MASTER }}
+            type=raw,value=${{ needs.meta.outputs.release }},enable=${{ env.IS_MASTER }}
+            type=ref,event=branch,enable=${{ env.IS_MASTER != 'true' }}
+            type=ref,event=branch,suffix=-${{ needs.meta.outputs.samba }},enable=${{ env.IS_MASTER != 'true' }}
+            type=ref,event=pr
+            type=ref,event=pr,suffix=-${{ needs.meta.outputs.samba }}
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: ${{ steps.tags.outputs.labels }}
+
+  release:
+    needs: [meta, publish]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - name: Create tag and GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.meta.outputs.release }}
+          SAMBA: ${{ needs.meta.outputs.samba }}
+          IMAGE: ${{ vars.DOCKERHUB_REPO }}
+        run: |
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" \
+            --generate-notes \
+            --notes "Samba **$SAMBA** on Alpine, linux/amd64 + linux/arm64.
+
+          docker pull $IMAGE:$TAG"
