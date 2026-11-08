@@ -23,6 +23,7 @@ jobs:
     outputs:
       samba: ${{ steps.v.outputs.samba }}
       minor: ${{ steps.v.outputs.minor }}
+      alpine: ${{ steps.v.outputs.alpine }}
       release: ${{ steps.v.outputs.release }}
     steps:
       - uses: actions/checkout@v6
@@ -34,11 +35,14 @@ jobs:
         run: |
           samba=$(sed -n 's/^ARG APK_SAMBA=\(.*\)-r[0-9]*$/\1/p' Dockerfile)
           [[ -n "$samba" ]] || { echo "cannot read APK_SAMBA" >&2; exit 1; }
+          alpine=$(sed -n 's/^FROM alpine:\([0-9.]*\)$/\1/p' Dockerfile)
+          [[ -n "$alpine" ]] || { echo "cannot read Alpine tag" >&2; exit 1; }
           # next build number for this Samba version: v4.23.8-1, -2, ...
           last=$(git tag -l "v${samba}-*" | sed "s/^v${samba}-//" | sort -n | tail -n1)
           {
             echo "samba=$samba"
             echo "minor=${samba%.*}"
+            echo "alpine=$alpine"
             echo "release=v${samba}-$(( ${last:-0} + 1 ))"
           } >> "$GITHUB_OUTPUT"
 
@@ -67,6 +71,7 @@ jobs:
             type=raw,value=latest,enable=${{ env.IS_MASTER }}
             type=raw,value=${{ needs.meta.outputs.minor }},enable=${{ env.IS_MASTER }}
             type=raw,value=${{ needs.meta.outputs.samba }},enable=${{ env.IS_MASTER }}
+            type=raw,value=${{ needs.meta.outputs.samba }}-alpine${{ needs.meta.outputs.alpine }},enable=${{ env.IS_MASTER }}
             type=raw,value=${{ needs.meta.outputs.release }},enable=${{ env.IS_MASTER }}
             type=ref,event=branch,enable=${{ env.IS_MASTER != 'true' }}
             type=ref,event=branch,suffix=-${{ needs.meta.outputs.samba }},enable=${{ env.IS_MASTER != 'true' }}
@@ -93,10 +98,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.meta.outputs.release }}
           SAMBA: ${{ needs.meta.outputs.samba }}
+          ALPINE: ${{ needs.meta.outputs.alpine }}
           IMAGE: ${{ vars.DOCKERHUB_REPO }}
         run: |
           gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" \
             --generate-notes \
-            --notes "Samba **$SAMBA** on Alpine, linux/amd64 + linux/arm64.
+            --notes "Samba **$SAMBA** on Alpine **$ALPINE**, linux/amd64 + linux/arm64.
 
           docker pull $IMAGE:$TAG"
