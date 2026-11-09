@@ -1,0 +1,114 @@
+name: windows-client
+
+# EXPERIMENT: test the image with the real Windows SMB client, all inside one
+# GitHub-hosted Windows runner: the Linux container runs in WSL2 (Ubuntu +
+# Docker engine, published on the WSL VM's port 445) and the native Windows
+# client maps the share by the WSL VM's IP. Nested virtualization is not
+# officially supported on hosted runners, so every step reports its outcome.
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/windows-client-probe]
+
+permissions:
+  contents: read
+
+env:
+  DISTRO: Ubuntu-24.04
+
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Windows diagnostics
+        id: diag
+        continue-on-error: true
+        run: |
+          Get-ComputerInfo -Property OsName,OsVersion,HyperVisorPresent | Format-List
+          Get-SmbClientConfiguration | Select-Object RequireSecuritySignature, EnableInsecureGuestLogons | Format-List
+
+      - name: WSL2 with Ubuntu and Docker
+        id: wsl
+        continue-on-error: true
+        uses: Vampire/setup-wsl@v7
+        with:
+          distribution: ${{ env.DISTRO }}
+          wsl-version: 2
+          additional-packages: docker.io
+
+      - name: Start Docker in WSL2
+        id: docker
+        continue-on-error: true
+        run: |
+          wsl --status
+          wsl -d $env:DISTRO -u root -- uname -a
+          # a long-running session keeps the distro (and dockerd) alive
+          Start-Process wsl -ArgumentList '-d',$env:DISTRO,'-u','root','--','sleep','infinity' -WindowStyle Hidden
+          wsl -d $env:DISTRO -u root -- service docker start
+          for ($i = 0; $i -lt 30; $i++) {
+            wsl -d $env:DISTRO -u root -- docker info *> $null
+            if ($LASTEXITCODE -eq 0) { break }
+            Start-Sleep 2
+          }
+          wsl -d $env:DISTRO -u root -- docker info
+          if ($LASTEXITCODE -ne 0) { wsl -d $env:DISTRO -u root -- sh -c 'tail -n 40 /var/log/docker.log'; exit 1 }
+
+      - name: Build the image from this checkout
+        id: build
+        continue-on-error: true
+        run: |
+          $ws = (wsl -d $env:DISTRO -u root -- wslpath -a "$env:GITHUB_WORKSPACE").Trim()
+          wsl -d $env:DISTRO -u root -- docker build -t samba-test $ws
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Start the samba container
+        id: run
+        continue-on-error: true
+        run: |
+          wsl -d $env:DISTRO -u root -- docker run -d --name samba -p 445:445 samba-test -u "alice;secret" -p -s "data;/share;yes;no;no;alice" -d false
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          for ($i = 0; $i -lt 30; $i++) {
+            wsl -d $env:DISTRO -u root -- docker exec samba smbclient -L //localhost -U% -m SMB3 *> $null
+            if ($LASTEXITCODE -eq 0) { break }
+            Start-Sleep 1
+          }
+          wsl -d $env:DISTRO -u root -- docker ps
+          # the WSL VM's address as seen from Windows (first one is eth0)
+          $ip = ((wsl -d $env:DISTRO -- hostname -I).Trim() -split ' ')[0]
+          Write-Host "WSL VM address: $ip"
+          "WSL_IP=$ip" | Out-File $env:GITHUB_ENV -Append
+          $t = Test-NetConnection $ip -Port 445 -WarningAction SilentlyContinue
+          $t | Format-List ComputerName,RemoteAddress,RemotePort,TcpTestSucceeded
+          if (-not $t.TcpTestSucceeded) { exit 1 }
+
+      - name: Windows client tests
+        id: client
+        continue-on-error: true
+        run: tests/windows-client.ps1 -Server $env:WSL_IP -Port 445
+
+      - name: Container logs
+        if: always()
+        continue-on-error: true
+        run: wsl -d $env:DISTRO -u root -- docker logs samba
+
+      - name: Summary
+        if: always()
+        run: |
+          $steps = [ordered]@{
+            'WSL2 + Ubuntu'       = '${{ steps.wsl.outcome }}'
+            'Docker in WSL2'      = '${{ steps.docker.outcome }}'
+            'Image build'         = '${{ steps.build.outcome }}'
+            'Container reachable' = '${{ steps.run.outcome }}'
+            'Windows client'      = '${{ steps.client.outcome }}'
+          }
+          $md = "### Windows client probe`n`n| Step | Result |`n|---|---|`n"
+          foreach ($k in $steps.Keys) { $md += "| $k | $($steps[$k]) |`n" }
+          $md | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          $md
+          if ('${{ steps.client.outcome }}' -ne 'success') { exit 1 }
