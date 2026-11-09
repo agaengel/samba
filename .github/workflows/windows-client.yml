@@ -24,6 +24,9 @@ jobs:
       run:
         shell: pwsh
     steps:
+      # no CRLF conversion: samba.sh and the Dockerfile are built inside Linux
+      - name: Keep LF line endings
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@v6
 
       - name: Windows diagnostics
@@ -63,7 +66,11 @@ jobs:
         id: build
         continue-on-error: true
         run: |
-          $ws = (wsl -d $env:DISTRO -u root -- wslpath -a "$env:GITHUB_WORKSPACE").Trim()
+          # D:\a\samba\samba -> /mnt/d/a/samba/samba (wsl.exe would eat the backslashes)
+          $p = $env:GITHUB_WORKSPACE
+          $ws = '/mnt/' + $p.Substring(0, 1).ToLower() + ($p.Substring(2) -replace '\\', '/')
+          Write-Host "build context: $ws"
+          wsl -d $env:DISTRO -u root -- ls $ws
           wsl -d $env:DISTRO -u root -- docker build -t samba-test $ws
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
