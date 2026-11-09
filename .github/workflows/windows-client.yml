@@ -101,7 +101,9 @@ jobs:
         continue-on-error: true
         timeout-minutes: 3
         run: |
-          wsl -d $env:DISTRO -u root -- docker run -d --name samba -p 445:445 samba-test -u "alice;secret" -p -s "data;/share;yes;no;no;alice" -d false
+          # wsl.exe runs the command through bash, so every ; must be escaped
+          # (an unescaped "yes" in the share definition ran the yes command)
+          wsl -d $env:DISTRO -u root -- docker run -d --name samba -p 445:445 samba-test -u 'alice\;secret' -p -s 'data\;/share\;yes\;no\;no\;alice' -d false
           if ($LASTEXITCODE -ne 0) { exit 1 }
           wsl -d $env:DISTRO -u root -- docker ps
 
