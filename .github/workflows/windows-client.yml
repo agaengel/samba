@@ -57,6 +57,7 @@ jobs:
       - name: WSL2 with Ubuntu and Docker
         id: wsl
         continue-on-error: true
+        timeout-minutes: 10
         uses: Vampire/setup-wsl@v7
         with:
           distribution: ${{ env.DISTRO }}
@@ -66,6 +67,7 @@ jobs:
       - name: Start Docker in WSL2
         id: docker
         continue-on-error: true
+        timeout-minutes: 5
         run: |
           wsl --status
           wsl -d $env:DISTRO -u root -- uname -a
@@ -83,6 +85,7 @@ jobs:
       - name: Load the image built on Linux
         id: load
         continue-on-error: true
+        timeout-minutes: 5
         run: |
           # D:\a\x\x\image\... -> /mnt/d/a/x/x/image/... (wsl.exe would eat the backslashes)
           $p = (Resolve-Path image\samba-test.tar.gz).Path
@@ -96,15 +99,30 @@ jobs:
       - name: Start the samba container
         id: run
         continue-on-error: true
+        timeout-minutes: 3
         run: |
           wsl -d $env:DISTRO -u root -- docker run -d --name samba -p 445:445 samba-test -u "alice;secret" -p -s "data;/share;yes;no;no;alice" -d false
           if ($LASTEXITCODE -ne 0) { exit 1 }
+          wsl -d $env:DISTRO -u root -- docker ps
+
+      - name: Wait until smbd answers
+        id: ready
+        continue-on-error: true
+        timeout-minutes: 3
+        run: |
           for ($i = 0; $i -lt 30; $i++) {
             wsl -d $env:DISTRO -u root -- docker exec samba smbclient -L //localhost -U% -m SMB3 *> $null
-            if ($LASTEXITCODE -eq 0) { break }
+            if ($LASTEXITCODE -eq 0) { Write-Host "smbd answered after $i s"; exit 0 }
             Start-Sleep 1
           }
-          wsl -d $env:DISTRO -u root -- docker ps
+          wsl -d $env:DISTRO -u root -- docker logs samba
+          exit 1
+
+      - name: Reach the container from Windows
+        id: reach
+        continue-on-error: true
+        timeout-minutes: 3
+        run: |
           # the WSL VM's address as seen from Windows (first one is eth0)
           $ip = ((wsl -d $env:DISTRO -- hostname -I).Trim() -split ' ')[0]
           Write-Host "WSL VM address: $ip"
@@ -116,11 +134,13 @@ jobs:
       - name: Windows client tests
         id: client
         continue-on-error: true
+        timeout-minutes: 10
         run: tests/windows-client.ps1 -Server $env:WSL_IP -Port 445
 
       - name: Container logs
         if: always()
         continue-on-error: true
+        timeout-minutes: 2
         run: wsl -d $env:DISTRO -u root -- docker logs samba
 
       - name: Summary
@@ -130,7 +150,9 @@ jobs:
             'WSL2 + Ubuntu'       = '${{ steps.wsl.outcome }}'
             'Docker in WSL2'      = '${{ steps.docker.outcome }}'
             'Image load'          = '${{ steps.load.outcome }}'
-            'Container reachable' = '${{ steps.run.outcome }}'
+            'Container started'   = '${{ steps.run.outcome }}'
+            'smbd answers'        = '${{ steps.ready.outcome }}'
+            'Reachable from Win'  = '${{ steps.reach.outcome }}'
             'Windows client'      = '${{ steps.client.outcome }}'
           }
           $md = "### Windows client probe`n`n| Step | Result |`n|---|---|`n"
