@@ -1,10 +1,11 @@
 name: windows-client
 
-# EXPERIMENT: test the image with the real Windows SMB client, all inside one
-# GitHub-hosted Windows runner: the Linux container runs in WSL2 (Ubuntu +
-# Docker engine, published on the WSL VM's port 445) and the native Windows
-# client maps the share by the WSL VM's IP. Nested virtualization is not
-# officially supported on hosted runners, so every step reports its outcome.
+# EXPERIMENT: test the image with the real Windows SMB client. A Linux job
+# builds the image and hands it over as an artifact; on a GitHub-hosted Windows
+# runner the image is loaded into Docker in WSL2 (Ubuntu), published on the WSL
+# VM's port 445, and the native Windows client maps the share by the WSL VM's
+# IP. Nested virtualization is not officially supported on hosted runners, so
+# every step of the Windows job reports its outcome.
 on:
   workflow_dispatch:
   push:
@@ -17,17 +18,34 @@ env:
   DISTRO: Ubuntu-24.04
 
 jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build the image and save it
+        run: |
+          docker build -t samba-test .
+          docker save samba-test | gzip > samba-test.tar.gz
+          ls -lh samba-test.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: samba-image
+          path: samba-test.tar.gz
+          compression-level: 0
+
   windows:
+    needs: build
     runs-on: windows-2025
     timeout-minutes: 30
     defaults:
       run:
         shell: pwsh
     steps:
-      # no CRLF conversion: samba.sh and the Dockerfile are built inside Linux
-      - name: Keep LF line endings
-        run: git config --global core.autocrlf false
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6   # only for tests/windows-client.ps1
+      - uses: actions/download-artifact@v7
+        with:
+          name: samba-image
+          path: image
 
       - name: Windows diagnostics
         id: diag
@@ -62,17 +80,18 @@ jobs:
           wsl -d $env:DISTRO -u root -- docker info
           if ($LASTEXITCODE -ne 0) { wsl -d $env:DISTRO -u root -- sh -c 'tail -n 40 /var/log/docker.log'; exit 1 }
 
-      - name: Build the image from this checkout
-        id: build
+      - name: Load the image built on Linux
+        id: load
         continue-on-error: true
         run: |
-          # D:\a\samba\samba -> /mnt/d/a/samba/samba (wsl.exe would eat the backslashes)
-          $p = $env:GITHUB_WORKSPACE
-          $ws = '/mnt/' + $p.Substring(0, 1).ToLower() + ($p.Substring(2) -replace '\\', '/')
-          Write-Host "build context: $ws"
-          wsl -d $env:DISTRO -u root -- ls $ws
-          wsl -d $env:DISTRO -u root -- docker build -t samba-test $ws
+          # D:\a\x\x\image\... -> /mnt/d/a/x/x/image/... (wsl.exe would eat the backslashes)
+          $p = (Resolve-Path image\samba-test.tar.gz).Path
+          $f = '/mnt/' + $p.Substring(0, 1).ToLower() + ($p.Substring(2) -replace '\\', '/')
+          Write-Host "image archive: $f"
+          wsl -d $env:DISTRO -u root -- ls -l $f
+          wsl -d $env:DISTRO -u root -- docker load -i $f
           if ($LASTEXITCODE -ne 0) { exit 1 }
+          wsl -d $env:DISTRO -u root -- docker images
 
       - name: Start the samba container
         id: run
@@ -110,7 +129,7 @@ jobs:
           $steps = [ordered]@{
             'WSL2 + Ubuntu'       = '${{ steps.wsl.outcome }}'
             'Docker in WSL2'      = '${{ steps.docker.outcome }}'
-            'Image build'         = '${{ steps.build.outcome }}'
+            'Image load'          = '${{ steps.load.outcome }}'
             'Container reachable' = '${{ steps.run.outcome }}'
             'Windows client'      = '${{ steps.client.outcome }}'
           }
