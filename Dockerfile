@@ -4,7 +4,7 @@ LABEL maintainer="David Personette <dperson@gmail.com>"
 # Pinned package versions, kept current by scripts/update-versions.sh
 ARG APK_BASH=5.3.9-r1
 ARG APK_SAMBA=4.23.8-r0
-ARG APK_SHADOW=4.18.0-r1
+ARG APK_SHADOW=4.20.4-r0
 ARG APK_SUPERVISOR=4.3.0-r1
 ARG APK_TZDATA=2026f-r0
 ARG APK_WSDD=0.9-r0
